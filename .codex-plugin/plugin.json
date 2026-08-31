@@ -1,0 +1,23 @@
+{
+  "name": "mailbride-mcp",
+  "version": "0.1.0",
+  "description": "Secure local MailBride MCP tools for multiple IMAP and SMTP accounts in Codex.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "MailBride MCP",
+    "shortDescription": "Search, read, draft, reply, forward, and organize email.",
+    "longDescription": "Connect multiple IMAP and SMTP accounts locally so Codex can search mail and contacts, read threads and attachments, compose with To, CC, and BCC, reply, reply-all, forward, and manage messages with explicit safety controls.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": ["Multi-account email", "Search", "Write"],
+    "defaultPrompt": [
+      "Search all my mailboxes for recent messages about a topic.",
+      "Find a contact and draft a reply for my approval.",
+      "Summarize an email thread and show unanswered messages."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

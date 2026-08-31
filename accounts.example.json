@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "id": "personal",
+      "displayName": "Your Name",
+      "email": "you@example.com",
+      "aliases": [],
+      "secretRef": "MAIL_PERSONAL",
+      "imap": {
+        "host": "imap.example.com",
+        "port": 993,
+        "tls": "implicit"
+      },
+      "smtp": {
+        "host": "smtp.example.com",
+        "port": 587,
+        "tls": "starttls"
+      },
+      "sentCopyMode": "provider",
+      "folders": {
+        "inbox": "INBOX",
+        "sent": "Sent",
+        "drafts": "Drafts",
+        "archive": "Archive",
+        "trash": "Trash",
+        "contacts": []
+      },
+      "policy": {
+        "allowNewMessages": true,
+        "allowReply": true,
+        "allowReplyAll": true,
+        "allowForward": true,
+        "allowBcc": true,
+        "allowAdditionalReplyRecipients": true,
+        "allowFolderMutations": false,
+        "allowTrash": false,
+        "blockNoReplyAddresses": true,
+        "maxRecipients": 25,
+        "blockedRecipientDomains": []
+      },
+      "allowedAttachmentRoots": [
+        "C:\\Users\\your-name\\Documents\\MailAttachments"
+      ]
+    },
+    {
+      "id": "work",
+      "displayName": "Your Name (Work)",
+      "email": "you@company.example",
+      "aliases": ["firstname.lastname@company.example"],
+      "secretRef": "MAIL_WORK",
+      "imap": {
+        "host": "outlook.office365.com",
+        "port": 993,
+        "tls": "implicit"
+      },
+      "smtp": {
+        "host": "smtp.office365.com",
+        "port": 587,
+        "tls": "starttls"
+      },
+      "sentCopyMode": "provider",
+      "folders": {
+        "inbox": "INBOX",
+        "sent": "Sent Items",
+        "drafts": "Drafts",
+        "archive": "Archive",
+        "trash": "Deleted Items",
+        "contacts": []
+      },
+      "policy": {
+        "allowNewMessages": false,
+        "allowReply": true,
+        "allowReplyAll": true,
+        "allowForward": true,
+        "allowBcc": false,
+        "allowAdditionalReplyRecipients": false,
+        "allowFolderMutations": false,
+        "allowTrash": false,
+        "blockNoReplyAddresses": true,
+        "maxRecipients": 25,
+        "allowedRecipientDomains": ["company.example"],
+        "blockedRecipientDomains": []
+      },
+      "allowedAttachmentRoots": []
+    }
+  ],
+  "limits": {
+    "maxSearchResults": 50,
+    "maxSearchOffset": 5000,
+    "maxSearchCandidatesPerFolder": 5000,
+    "maxConcurrentConnections": 4,
+    "maxMessageBytes": 15728640,
+    "maxBodyChars": 100000,
+    "maxAttachmentBytes": 26214400,
+    "maxPreparedDrafts": 20,
+    "draftTtlSeconds": 900,
+    "contactScanMessagesPerFolder": 1000,
+    "contactCacheSeconds": 300
+  }
+}

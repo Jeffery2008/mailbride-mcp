@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "mailbride-mcp": {
+      "command": "node",
+      "args": ["./dist/server.cjs", "--stdio"],
+      "cwd": ".",
+      "enabled": true,
+      "default_tools_approval_mode": "approve",
+      "tools": {
+        "mail_draft_send": { "approval_mode": "prompt" },
+        "mail_flags_update": { "approval_mode": "prompt" },
+        "mail_move": { "approval_mode": "prompt" },
+        "mail_copy": { "approval_mode": "prompt" },
+        "mail_trash": { "approval_mode": "prompt" },
+        "mail_delete_permanently": { "approval_mode": "prompt" },
+        "mail_folder_manage": { "approval_mode": "prompt" }
+      },
+      "env_vars": ["CODEX_EMAIL_CONFIG", "CODEX_EMAIL_CREDENTIALS_FILE"],
+      "startup_timeout_sec": 15,
+      "tool_timeout_sec": 120
+    }
+  }
+}

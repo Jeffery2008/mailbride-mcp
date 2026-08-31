@@ -1,0 +1,42 @@
+{
+  "name": "mailbride-mcp",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Jeffery2008/mailbride-mcp.git"
+  },
+  "description": "MailBride MCP: a local Codex MCP plugin for securely reading multiple IMAP inboxes and replying over SMTP.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=cjs --target=node20 --outfile=dist/server.cjs --sourcemap",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "validate": "pnpm check && pnpm test && pnpm build",
+    "check-config": "node dist/server.cjs --check-config",
+    "start": "node dist/server.cjs --stdio"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "html-to-text": "10.0.1",
+    "imapflow": "1.7.6",
+    "mailparser": "3.9.17",
+    "nodemailer": "9.0.6",
+    "zod": "4.5.4"
+  },
+  "devDependencies": {
+    "@types/html-to-text": "9.0.4",
+    "@types/mailparser": "3.4.6",
+    "@types/node": "26.4.0",
+    "@types/nodemailer": "8.0.1",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  },
+  "packageManager": "pnpm@11.15.1"
+}

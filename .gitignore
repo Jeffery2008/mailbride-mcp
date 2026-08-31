@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+accounts.json
+credentials.json
+*.log
+*.pem
+*.key
+.DS_Store
+Thumbs.db
