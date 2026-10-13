@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "id": "gmail",
+      "displayName": "Gmail",
+      "email": "you@gmail.com",
+      "secretRef": "MAIL_GMAIL",
+      "imap": {
+        "host": "imap.gmail.com",
+        "port": 993,
+        "tls": "implicit"
+      },
+      "smtp": {
+        "host": "smtp.gmail.com",
+        "port": 465,
+        "tls": "implicit"
+      },
+      "sentCopyMode": "provider",
+      "draftSyncMode": "none",
+      "folders": {
+        "inbox": "INBOX"
+      },
+      "policy": {
+        "allowNewMessages": true,
+        "allowReply": true,
+        "allowReplyAll": true,
+        "allowForward": true,
+        "allowBcc": true,
+        "allowAdditionalReplyRecipients": true,
+        "allowFolderMutations": false,
+        "allowTrash": false
+      },
+      "allowedAttachmentRoots": []
+    }
+  ]
+}

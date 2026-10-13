@@ -14,6 +14,7 @@ SMTP 只负责发信；搜索、阅读、文件夹和邮件标记由 IMAP 完成
 - 从单个账号或所有账号搜索近期往来人（地址、姓名、出现次数、最近出现时间）。
 - 新建邮件、回复、回复全部、转发；支持 To、CC、BCC、纯文本/HTML 和受限附件。
 - 草稿修订、预览、显式确认后发送，以及幂等重试。
+- 可选的云端 Drafts 同步：自动保存/更新草稿、检测外部编辑冲突、清理旧版本，并核对不明确的 APPEND 结果。
 - 已读/未读、星标、已回复、草稿标记，复制、移动、移入垃圾箱和受保护的永久删除。
 - 创建、重命名、删除、订阅和取消订阅文件夹。
 
@@ -34,6 +35,8 @@ pnpm build
 ```
 
 `pnpm validate` 会执行 TypeScript 检查、测试和构建。构建产物是 `dist/server.cjs`。
+
+升级已有安装时，拉取代码后重新执行 `pnpm install` 和 `pnpm validate`，并更新实际注册给 Codex 的 `dist/server.cjs`。若使用个人插件，插件目录中的构建文件也需同步更新。重新加载 MCP（或重启 Codex App）后，新进程才会使用新代码与配置。不要把旧进程的 `draftId`、预览令牌或 opaque 邮件引用带到新进程中；需要时重新搜索邮件。
 
 ## 配置账号
 
@@ -77,6 +80,12 @@ $env:CODEX_EMAIL_CREDENTIALS_FILE = 'C:\\Users\\you\\AppData\\Roaming\\CodexEmai
 ```powershell
 pnpm check-config
 ```
+
+### 添加 Gmail 账号
+
+完整步骤和可复制的 JSON 见 [Gmail 接入指南](./docs/gmail.md)、[Gmail 账号模板](./examples/gmail.accounts.example.json) 和 [Gmail 凭据模板](./examples/gmail.credentials.example.json)。把模板中的账号对象合并到已有 `accounts` 数组，把凭据条目合并到已有 `secrets` 对象；保留其它邮箱，不要用模板覆盖整个现有文件。
+
+Gmail 接入指南使用应用专用密码，先完成 IMAP 连接和实际文件夹路径确认，再开启云端草稿同步。MailBride 当前支持已有的 OAuth access token，但没有浏览器授权或 token 自动刷新流程。
 
 ## 连接 Codex
 
@@ -147,7 +156,7 @@ Codex App、CLI 和 IDE 扩展会共享同一台 Codex host 上的 MCP 配置。
 
 服务商兼容性：`query`/`text` 会编译为 `SUBJECT`、`BODY`、`FROM` 和 `TO` 的 OR 查询，不直接依赖部分服务商实现不稳定的 IMAP `TEXT`；显式 `cc`/`bcc` 条件会在读取 envelope 后再次校验。CC/BCC 搜索同样受每文件夹候选上限约束，若 envelope 未提供隐藏收件人，或扫描窗口提前耗尽，应以返回的 `partial`、`hasMore` 和 `errors` 为准并收窄条件。
 
-全局游标最多翻到 `limits.maxSearchOffset`（示例为 5000）；到达深度上限时不再签发一个下一次必然失效的 cursor，而是返回当前页、标记 `partial` 并提示收窄条件。`hasAttachments` 需要逐封读取 IMAP `BODYSTRUCTURE`，每个文件夹最多检查 `limits.maxSearchCandidatesPerFolder`（示例为 5000）个候选；普通搜索也会使用有界的 IMAP sequence 窗口，避免把整个大型邮箱的 UID 集合物化。达到上限时同样返回已找到的结果并标记 `partial`；这样不会把候选窗口外的未知状态误报成完整的空结果。`limits.maxConcurrentConnections`（示例为 4）限制跨账号搜索、联系人扫描和线程读取同时建立的 IMAP 连接数，可按服务商连接上限调整。
+全局游标最多翻到 `limits.maxSearchOffset`（示例为 5000）；到达深度上限时不再签发一个下一次必然失效的 cursor，而是返回当前页、标记 `partial` 并提示收窄条件。`hasAttachments` 需要逐封读取 IMAP `BODYSTRUCTURE`，每个文件夹最多检查 `limits.maxSearchCandidatesPerFolder`（示例为 5000）个候选；普通搜索也会使用有界的 IMAP sequence 窗口，避免把整个大型邮箱的 UID 集合物化。达到上限时同样返回已找到的结果并标记 `partial`；这样不会把候选窗口外的未知状态误报成完整的空结果。`limits.maxConcurrentConnections`（示例为 4）控制跨账号搜索、联系人扫描和线程读取内部的并发任务数；同一账号的 IMAP 连接还会在进程内排队，多个 MCP 调用不会各自为该账号打开并行连接。不同 MCP 进程不共享这个队列。
 
 ## 搜索示例
 
@@ -249,15 +258,39 @@ SMTP 返回 `accepted`、`partial`、`rejected` 或 `unknown`。`accepted` 只�
 }
 ```
 
-`mail_draft_create` 和 `mail_draft_update` 会把完整 MIME 以 `\\Draft`、`\\Seen` 标记保存到这个文件夹，在网页、手机及其它邮件客户端中可见。云端草稿保留 To/CC/BCC、HTML、附件和回复线程头；提交给 SMTP 的 MIME 仍会移除 BCC header。同步开关只授权管理该 MCP 草稿自己的副本，不会打开 `allowFolderMutations` 或 `allowTrash`。
+`mail_draft_create` 和 `mail_draft_update` 会把完整 MIME 以 `\Draft`、`\Seen` 标记保存到这个文件夹，在网页、手机及其它邮件客户端中可见。云端草稿保留 To/CC/BCC、HTML、附件和回复线程头；提交给 SMTP 的 MIME 仍会移除 BCC header。同步开关只授权管理该 MCP 草稿自己的副本，不会打开 `allowFolderMutations` 或 `allowTrash`。
 
-返回的 `cloudDraft` 包含 `status`、`mailbox`、已保存的 `revision`、可传给 `mail_get` 的 opaque `messageId`，以及 `cleanupPending`/`detail`。`saved` 表示当前 revision 已保存并验证；`partial` 表示新版本已保存但旧版本清理失败；`not_saved` 表示未同步；`unknown` 表示 APPEND 结果仍需核对；`conflict` 表示云端内容、标记或 UIDVALIDITY 已改变。`disabled` 表示关闭同步。不能把一个成功的本地草稿创建结果等同于成功的云端保存。
+返回的 `cloudDraft` 包含 `status`、`mailbox`、已保存的 `revision`、可传给 `mail_get` 的 opaque `messageId`，以及 `cleanupPending`/`detail`。`cleanupPending` 专指旧版本是否仍待清理；发送后的清理失败还需查看 `status` 和 `detail`。只有 `status: "saved"` 且云端 `revision` 等于当前草稿 `revision`，才能确认当前内容已保存。
+
+| `cloudDraft.status` | 含义 | 后续操作 |
+| --- | --- | --- |
+| `disabled` | 账号未开启云端同步 | 确认文件夹后设置 `draftSyncMode: "imap"` |
+| `saved` | 当前版本已保存并验证 | 可用返回的 opaque `messageId` 调用 `mail_get` |
+| `partial` | 新版本已保存，旧版本清理失败 | 用同一 `draftId`、当前 `revision` 调用 `mail_draft_sync` |
+| `not_saved` | 当前版本未同步，可能仍有较旧的云端副本 | 查看 `detail`，修正问题后同步同一草稿 |
+| `unknown` | APPEND 或清理结果仍不明确 | 核对 Drafts；同步工具会先尝试核对现有副本，避免再次 APPEND |
+| `conflict` | 云端内容、身份、标记或 UIDVALIDITY 已改变 | 在邮箱客户端查看并处理，不覆盖外部修改 |
+| `removed` | 对应云端副本已清理，或没有需要清理的副本 | 丢弃已完成，或已完成发送后的清理 |
+| `retained` | SMTP 部分接受/结果不明后保留云端副本；仅在发送结果中出现 | 人工核对投递情况，避免重复发送 |
+
+同步失败后保留原 `draftId`，传入真实返回的值重试：
+
+```json
+{
+  "draftId": "返回的草稿 UUID",
+  "revision": 2
+}
+```
+
+上述对象是 `mail_draft_sync` 的参数。同步不会递增 revision；本地编辑成功但云端失败时，仍要使用编辑后返回的新 revision。旧版清理失败时，该调用会先清理已跟踪的旧版本，再决定是否需要保存新的副本。
 
 IMAP 不能原地编辑消息，所以更新采用“验证旧稿 → APPEND 新稿并验证 UID/内容 → 选择性删除旧稿”。更新和清理要求 UIDPLUS，拒绝会影响其它消息的宽泛 EXPUNGE。若同步失败，本地内容、draftId 和 revision 都保留；请用 `mail_draft_sync({ draftId, revision })` 重试同一对象，避免再次调用 create 生成重复草稿。超时等不明确 APPEND 会先按唯一 Message-ID 在有界窗口里核对，未确认前不再次 APPEND。邮箱客户端的外部修改会阻止覆盖、丢弃和发送本地副本。
 
 `mail_draft_discard` 会清理该对象对应的已验证云端副本，再丢弃本地草稿；失败会返回 `discarded: false` 并保留本地对象。SMTP `accepted` 后自动清理 Drafts，清理失败不改变发送结果，可再次调用 `mail_draft_sync` 仅重试清理。SMTP `rejected` 保留可编辑草稿；`partial`/`unknown` 保留云端副本用于人工核对，禁止自动重发。不要因 Drafts 仍有副本而推断邮件未发送。
 
 所有操作在每个 MCP 进程内按账号排队建立 IMAP 连接，同一个草稿的编辑、预览、同步、丢弃和发送也串行处理。云端 MIME 受现有 `maxMessageBytes` 约束，生成时流式计数，未放大内存/附件限制。进程重启或本地草稿 TTL 到期不会删除云端草稿；可在邮箱客户端继续编辑/发送，但旧的 MCP draftId 不会跨进程恢复，双向导入仍不支持。
+
+默认读取/云端 MIME 上限是 15 MiB，正文上限 100,000 字符，附件总量上限 25 MiB。云端保存还受完整 MIME 大小限制，附件编码和邮件头都会增加体积，因此附件未超过自身上限也不代表整封草稿可以同步。无需为了添加 Gmail 调高这些限制。
 
 ## 安全和权限
 
@@ -274,6 +307,8 @@ IMAP 不能原地编辑消息，所以更新采用“验证旧稿 → APPEND 新
 ## 常见问题
 
 **认证失败**：确认 IMAP/SMTP 主机、端口、TLS 模式与服务商要求一致。Gmail、Microsoft 365 等通常需要 OAuth 或应用密码，不接受普通账户密码。
+
+**Gmail 接入**：见 [Gmail 接入指南](./docs/gmail.md)。应用专用密码入口不可用时，可能受到账号/组织策略限制；静态 OAuth access token 也不能替代完整的授权和刷新流程。
 
 **搜索结果不完整**：改用 `mail_search` 并查看返的 `partial` 和 `errors`；标准 `search` 只返回 `{id,title,url}` 结果。某个文件夹不支持搜索、连接超时或权限不足时，`mail_search` 会保留其它账号结果。
 
