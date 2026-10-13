@@ -34,6 +34,7 @@ const runtime: AccountRuntime = {
     imap: { host: "imap.example.com", port: 993, tls: "implicit" },
     smtp: { host: "smtp.example.com", port: 465, tls: "implicit" },
     sentCopyMode: "imap_append",
+    draftSyncMode: "none",
     folders: { inbox: "INBOX", sent: "Sent" },
     policy: {
       allowNewMessages: true,

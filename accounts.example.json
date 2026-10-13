@@ -18,6 +18,7 @@
         "tls": "starttls"
       },
       "sentCopyMode": "provider",
+      "draftSyncMode": "imap",
       "folders": {
         "inbox": "INBOX",
         "sent": "Sent",
@@ -60,6 +61,7 @@
         "tls": "starttls"
       },
       "sentCopyMode": "provider",
+      "draftSyncMode": "none",
       "folders": {
         "inbox": "INBOX",
         "sent": "Sent Items",

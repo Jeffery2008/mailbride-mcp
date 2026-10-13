@@ -1,7 +1,8 @@
 import { open, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import type { AccountConfig, LoadedConfig } from "./config.js";
-import { DraftStore, type DraftAttachment, type DraftMode, type StoredDraft } from "./drafts.js";
+import { DraftStore, type CloudDraftView, type DraftAttachment, type DraftMode, type StoredDraft } from "./drafts.js";
+import { removeCloudDraft, syncCloudDraft, verifyCloudDraft } from "./cloud-drafts.js";
 import {
   copyMessage as copyMessageImap,
   fetchAttachmentSource,
@@ -285,6 +286,7 @@ export class MailService {
   readonly #tokens = new OpaqueTokenCodec();
   readonly #drafts: DraftStore;
   readonly #contactCache = new Map<string, CachedContacts>();
+  readonly #draftOperations = new Map<string, Promise<unknown>>();
 
   constructor(config: LoadedConfig) {
     this.#config = config;
@@ -303,6 +305,19 @@ export class MailService {
     const account = this.#accounts.get(id.toLowerCase());
     if (!account) throw new Error(`unknown account id: ${id}`);
     return account;
+  }
+
+  // Network synchronization must finish before another edit, preview, send,
+  // or discard can observe the same draft. Separate drafts can still proceed.
+  private async withDraftLock<T>(id: string, operation: () => Promise<T> | T): Promise<T> {
+    const previous = this.#draftOperations.get(id) || Promise.resolve();
+    const pending = previous.catch(() => {}).then(operation);
+    this.#draftOperations.set(id, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.#draftOperations.get(id) === pending) this.#draftOperations.delete(id);
+    }
   }
 
   private accounts(accountId?: string): AccountRuntime[] {
@@ -343,6 +358,7 @@ export class MailService {
         replyAll: account.policy.allowReplyAll,
         forward: account.policy.allowForward,
         bcc: account.policy.allowBcc,
+        cloudDrafts: account.draftSyncMode === "imap",
         messageManagement: account.policy.allowFolderMutations,
       },
     }));
@@ -1038,7 +1054,9 @@ export class MailService {
     if (replyRecipientAllowlist) draftInput.replyRecipientAllowlist = replyRecipientAllowlist;
     try {
       this.validateRecipients(runtime.account, draftInput);
-      return this.publicDraft(this.#drafts.create(draftInput));
+      const draft = this.#drafts.create(draftInput);
+      await syncCloudDraft(runtime, this.#config.config, draft);
+      return this.publicDraft(draft);
     } catch (error) {
       for (const attachment of attachments) attachment.content.fill(0);
       throw error;
@@ -1046,6 +1064,10 @@ export class MailService {
   }
 
   async updateDraft(request: UpdateDraftRequest) {
+    return this.withDraftLock(request.draftId, () => this.updateDraftLocked(request));
+  }
+
+  private async updateDraftLocked(request: UpdateDraftRequest) {
     const current = this.#drafts.get(request.draftId);
     const runtime = this.account(current.accountId);
     const attachments = request.attachments
@@ -1070,6 +1092,7 @@ export class MailService {
         this.validateRecipients(runtime.account, draft);
       });
       transferred = attachments !== undefined;
+      await syncCloudDraft(runtime, this.#config.config, updated);
       return this.publicDraft(updated);
     } catch (error) {
       if (!transferred && attachments) {
@@ -1079,7 +1102,27 @@ export class MailService {
     }
   }
 
-  previewDraft(draftId: string, revision: number) {
+  async syncDraft(draftId: string, revision: number) {
+    return this.withDraftLock(draftId, async () => {
+      const draft = this.#drafts.get(draftId);
+      if (draft.revision !== revision) throw new Error(`draft revision conflict: expected ${revision}, current is ${draft.revision}`);
+      const runtime = this.account(draft.accountId);
+      if (draft.sentAt) {
+        if (draft.deliveryStatus !== "accepted") throw new Error("cloud drafts cannot be changed after a partial or unknown delivery; verify delivery in your mail client");
+        await removeCloudDraft(runtime, this.#config.config, draft);
+        return this.publicDraft(draft);
+      }
+      this.validateRecipients(runtime.account, draft);
+      await syncCloudDraft(runtime, this.#config.config, draft);
+      return this.publicDraft(draft);
+    });
+  }
+
+  async previewDraft(draftId: string, revision: number) {
+    return this.withDraftLock(draftId, () => this.previewDraftLocked(draftId, revision));
+  }
+
+  private previewDraftLocked(draftId: string, revision: number) {
     const draft = this.#drafts.get(draftId);
     const runtime = this.account(draft.accountId);
     this.validateRecipients(runtime.account, draft);
@@ -1087,12 +1130,23 @@ export class MailService {
       ...this.#drafts.preview(draftId, revision),
       from: { name: runtime.account.displayName, address: runtime.account.email },
       warnings: draft.warnings,
+      cloudDraft: this.cloudDraftView(draft),
       instruction:
         "Show the user the exact From, To, CC, BCC, subject, attachment list, warnings, and digest. Call mail_draft_send only after the user explicitly confirms this exact preview.",
     };
   }
 
   async sendDraft(
+    draftId: string,
+    revision: number,
+    confirmationToken: string,
+    idempotencyKey: string,
+    confirmed: true,
+  ): Promise<SendResult & { answeredFlagUpdated?: boolean }> {
+    return this.withDraftLock(draftId, () => this.sendDraftLocked(draftId, revision, confirmationToken, idempotencyKey, confirmed));
+  }
+
+  private async sendDraftLocked(
     draftId: string,
     revision: number,
     confirmationToken: string,
@@ -1109,6 +1163,7 @@ export class MailService {
     if (authorized.prior) return authorized.prior;
     const runtime = this.account(authorized.draft.accountId);
     this.validateRecipients(runtime.account, authorized.draft);
+    await verifyCloudDraft(runtime, this.#config.config, authorized.draft);
     const result = await sendDraft(runtime, authorized.draft, this.#config.config);
     if (result.status === "rejected") {
       // A definite pre-acceptance rejection is safe to edit and retry after a
@@ -1119,6 +1174,19 @@ export class MailService {
       // accepted/partial are sent; unknown is also terminal to avoid duplicates
       // after a possible DATA acceptance followed by a timeout.
       this.#drafts.recordSend(idempotencyKey, authorized.draft, authorized.digest, result);
+    }
+
+    if (result.status === "accepted") {
+      await removeCloudDraft(runtime, this.#config.config, authorized.draft);
+      result.cloudDraft = this.cloudDraftView(authorized.draft);
+    } else if ((result.status === "partial" || result.status === "unknown") && authorized.draft.cloudDraft) {
+      result.cloudDraft = {
+        ...this.cloudDraftView(authorized.draft),
+        status: "retained",
+        detail: "Cloud draft was retained after a partial or unknown SMTP outcome. Verify delivery before sending from another client.",
+      };
+    } else {
+      result.cloudDraft = this.cloudDraftView(authorized.draft);
     }
 
     let answeredFlagUpdated: boolean | undefined;
@@ -1146,8 +1214,43 @@ export class MailService {
     return answeredFlagUpdated === undefined ? result : { ...result, answeredFlagUpdated };
   }
 
-  discardDraft(draftId: string) {
-    return { discarded: this.#drafts.discard(draftId) };
+  async discardDraft(draftId: string) {
+    return this.withDraftLock(draftId, async () => {
+      let draft: StoredDraft;
+      try {
+        draft = this.#drafts.get(draftId);
+      } catch {
+        return { discarded: false };
+      }
+      if (draft.sentAt) throw new Error("sent drafts cannot be discarded from the audit window");
+      const runtime = this.account(draft.accountId);
+      const removed = await removeCloudDraft(runtime, this.#config.config, draft);
+      const cloudDraft = this.cloudDraftView(draft);
+      if (!removed) return { discarded: false, cloudDraft };
+      return { discarded: this.#drafts.discard(draftId), cloudDraft };
+    });
+  }
+
+  private cloudDraftView(draft: StoredDraft): CloudDraftView {
+    const runtime = this.account(draft.accountId);
+    if (runtime.account.draftSyncMode !== "imap") return { status: "disabled" };
+    const state = draft.cloudDraft;
+    const current = state?.current;
+    return {
+      status: state?.status || "not_saved",
+      mailbox: state?.mailbox || runtime.account.folders.drafts!,
+      ...(current ? {
+        revision: current.revision,
+        messageId: this.#tokens.issue<MessageLocator>("message", {
+          accountId: draft.accountId,
+          mailbox: current.mailbox,
+          uidValidity: current.uidValidity,
+          uid: current.uid,
+        }),
+      } : {}),
+      cleanupPending: Boolean(state?.previous),
+      ...(state?.detail ? { detail: state.detail } : {}),
+    };
   }
 
   private publicDraft(draft: StoredDraft) {
@@ -1166,6 +1269,7 @@ export class MailService {
       warnings: draft.warnings,
       createdAt: draft.createdAt,
       updatedAt: draft.updatedAt,
+      cloudDraft: this.cloudDraftView(draft),
     };
   }
 

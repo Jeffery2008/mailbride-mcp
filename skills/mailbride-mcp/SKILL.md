@@ -32,7 +32,7 @@ Use `fetch` or its alias `mail_get` with the opaque `id` from search for one mes
 
 ## Compose, reply and forward
 
-1. Call `mail_draft_create` with `accountId`, `mode` (`new`, `reply`, `reply_all`, or `forward`), body and optional `to`, `cc`, `bcc`, HTML, and attachments.
+1. Call `mail_draft_create` with `accountId`, `mode` (`new`, `reply`, `reply_all`, or `forward`), body and optional `to`, `cc`, `bcc`, HTML, and attachments. Accounts with `draftSyncMode: "imap"` automatically save to their configured cloud Drafts folder. Check `cloudDraft.status` before claiming cloud persistence.
 2. Use `mail_draft_update` with the returned `draftId` and `revision` for edits. A revision conflict means the caller must re-read the current draft; every edit invalidates the previous preview.
 3. Call `mail_draft_preview` and show the exact From, To, CC, BCC, subject, body summary, attachments, warnings and digest to the user.
 4. Only after an explicit user confirmation of that exact preview call `mail_draft_send` with the same revision, confirmation token, a fresh `idempotencyKey`, and `confirmed: true`.
@@ -40,6 +40,14 @@ Use `fetch` or its alias `mail_get` with the opaque `id` from search for one mes
 Never call `mail_draft_send` merely because a user asked to "prepare", "draft", "reply", or "send when ready". If the SMTP result is `unknown`, do not retry automatically; inspect Sent and provider delivery records first. With `sentCopyMode: "none"` or `"imap_append"`, no Sent copy is added after an unknown outcome, so absence is not proof of non-acceptance. `partial` means some recipients were accepted and some rejected, so retry only the rejected recipients after user review.
 
 Reply uses `Reply-To` when present, otherwise `From`. Reply-all removes the current account and all configured aliases and never copies BCC. Reply headers use `In-Reply-To` and `References`. Forwarding does not inherit reply-thread headers and does not include original attachments unless `includeOriginalAttachments: true` is explicit. BCC is envelope-only and must not be disclosed to To/CC recipients.
+
+## Cloud drafts
+
+`list_accounts.capabilities.cloudDrafts` indicates automatic cloud synchronization. `cloudDraft.status: "saved"` and its `revision` confirm the current copy; `partial` means the new copy exists but old-copy cleanup is pending. `not_saved`, `unknown`, and `conflict` do not confirm cloud persistence. The returned `cloudDraft.messageId` is an opaque reference usable with `mail_get`; never decode it or reconstruct a UID.
+
+On sync failure, use `mail_draft_sync` with the same `draftId` and current `revision`, rather than creating another local draft. Unknown APPEND results are reconciled without blindly writing a second copy. External client edits, deleted flags, or changed UIDVALIDITY cause conflicts; report them and review the cloud copy instead of overwriting it. Cloud Drafts retain BCC for the account owner, while SMTP MIME still strips BCC headers.
+
+`mail_draft_discard` removes only verified cloud copies belonging to that local draft, then discards the local object. A failed cleanup returns `discarded: false`; do not report success. SMTP `accepted` removes the cloud draft; `mail_draft_sync` can retry cleanup without resending. `rejected` retains the editable draft, and `partial`/`unknown` retain the cloud copy for manual delivery review. Neither a cloud copy nor its absence is proof of delivery. Safe replacement/deletion requires UIDPLUS. Cloud copies survive MCP restart/TTL expiry, but local draft ids and confirmation tokens do not; there is no cloud-to-local import.
 
 `sentCopyMode: "provider"` relies on the provider and performs no IMAP APPEND or verification. `"none"` saves no copy. With `"imap_append"`, after SMTP accepts at least one recipient the server separately attempts to APPEND the same locally submitted raw MIME as a `\Seen` copy to `folders.sent`; this is not a provider-read verification. A missing folder or failed APPEND yields `sentCopy: "not_saved"` without changing the already known SMTP status.
 

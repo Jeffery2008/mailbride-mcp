@@ -264,9 +264,9 @@ export function createServer(): McpServer {
     "mail_draft_create",
     {
       title: "Create email draft",
-      description: "Use this to prepare a new message, reply, reply-all, or forward with To, CC, BCC, optional HTML, and allowlisted local attachments. It does not send email.",
+      description: "Prepare a new message, reply, reply-all, or forward. Automatically saves to the account's cloud Drafts folder when draftSyncMode is imap. Check cloudDraft.status; failures preserve the local draft. It does not send email.",
       inputSchema: DraftCreateSchema,
-      annotations: localWrite,
+      annotations: mailboxWrite,
     },
     async (args) => result(await (await service()).createDraft(args as CreateDraftRequest)),
   );
@@ -275,7 +275,7 @@ export function createServer(): McpServer {
     "mail_draft_update",
     {
       title: "Update email draft",
-      description: "Use this to edit an existing prepared draft. The current revision is required so an older agent action cannot overwrite newer content. It does not send email.",
+      description: "Edit a prepared draft using its current revision and synchronize the cloud copy when enabled. External mail-client edits cause a conflict rather than an overwrite. Check cloudDraft.status. It does not send email.",
       inputSchema: z
         .object({
           draftId: z.string().uuid(),
@@ -289,9 +289,20 @@ export function createServer(): McpServer {
           attachments: z.array(AttachmentSchema).max(20).optional(),
         })
         .strict(),
-      annotations: localWrite,
+      annotations: mailboxWrite,
     },
     async (args) => result(await (await service()).updateDraft(args as UpdateDraftRequest)),
+  );
+
+  server.registerTool(
+    "mail_draft_sync",
+    {
+      title: "Synchronize cloud draft",
+      description: "Retry cloud Drafts synchronization without changing the revision. Use the same draftId after a failure. Unknown APPEND outcomes are reconciled before new writes. After accepted SMTP delivery, this retries cloud cleanup only and never resends.",
+      inputSchema: z.object({ draftId: z.string().uuid(), revision: z.number().int().min(1) }).strict(),
+      annotations: { ...mailboxWrite, idempotentHint: true },
+    },
+    async ({ draftId, revision }) => result(await (await service()).syncDraft(draftId, revision)),
   );
 
   server.registerTool(
@@ -305,7 +316,7 @@ export function createServer(): McpServer {
       // side effects.
       annotations: localWrite,
     },
-    async ({ draftId, revision }) => result((await service()).previewDraft(draftId, revision)),
+    async ({ draftId, revision }) => result(await (await service()).previewDraft(draftId, revision)),
   );
 
   server.registerTool(
@@ -340,11 +351,11 @@ export function createServer(): McpServer {
     "mail_draft_discard",
     {
       title: "Discard prepared draft",
-      description: "Use this to remove an unsent in-memory draft from this MCP process. This does not delete an IMAP Drafts message.",
+      description: "Discard an unsent prepared draft and, when enabled, remove only its verified cloud Drafts copies. Conflicts or failed cloud cleanup preserve the local draft for review and retry.",
       inputSchema: z.object({ draftId: z.string().uuid() }).strict(),
-      annotations: { ...localWrite, destructiveHint: true, idempotentHint: true },
+      annotations: { ...mailboxWrite, destructiveHint: true, idempotentHint: true },
     },
-    async ({ draftId }) => result((await service()).discardDraft(draftId)),
+    async ({ draftId }) => result(await (await service()).discardDraft(draftId)),
   );
 
   server.registerTool(

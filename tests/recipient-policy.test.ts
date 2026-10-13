@@ -13,6 +13,7 @@ function account(overrides: Partial<AccountConfig["policy"]> = {}): AccountConfi
     imap: { host: "imap.example.com", port: 993, tls: "implicit" },
     smtp: { host: "smtp.example.com", port: 465, tls: "implicit" },
     sentCopyMode: "provider",
+    draftSyncMode: "none",
     folders: { inbox: "INBOX" },
     policy: {
       allowNewMessages: false,

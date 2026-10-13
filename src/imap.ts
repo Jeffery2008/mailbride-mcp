@@ -38,6 +38,8 @@ export interface ContactScanResult {
 
 type CapabilityView = Pick<ImapFlow, "capabilities" | "enabled">;
 
+const accountConnections = new Map<string, Promise<unknown>>();
+
 /** Match ImapFlow's RFC 9051 folding for the destructive capabilities we use. */
 export function hasImapCapability(client: CapabilityView, capability: "MOVE" | "UIDPLUS"): boolean {
   if (client.capabilities.has(capability)) return true;
@@ -87,19 +89,36 @@ export async function withImapClient<T>(
   maxMessageBytes: number,
   callback: (client: ImapFlow) => Promise<T>,
 ): Promise<T> {
-  const client = createImapClient(runtime, maxMessageBytes);
-  client.on("error", () => {
-    // Errors are surfaced by the awaited operation. Never log protocol data or credentials here.
-  });
-  await client.connect();
-  try {
-    return await callback(client);
-  } finally {
+  // All tools share one queue per account in this MCP process, including
+  // cloud sync. Parallel MCP calls must not multiply logins or MIME buffers.
+  const key = `${runtime.account.id}:${runtime.account.imap.host}:${runtime.account.imap.port}`;
+  const previous = accountConnections.get(key) || Promise.resolve();
+  const pending = previous.catch(() => {}).then(async () => {
+    const client = createImapClient(runtime, maxMessageBytes);
+    let connected = false;
+    client.on("error", () => {
+      // Awaited operations surface errors without logging protocol data.
+    });
     try {
-      await client.logout();
-    } catch {
-      client.close();
+      await client.connect();
+      connected = true;
+      return await callback(client);
+    } finally {
+      if (!connected) client.close();
+      else {
+        try {
+          await client.logout();
+        } catch {
+          client.close();
+        }
+      }
     }
+  });
+  accountConnections.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    if (accountConnections.get(key) === pending) accountConnections.delete(key);
   }
 }
 

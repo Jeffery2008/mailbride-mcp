@@ -4,6 +4,42 @@ import { messageDigest } from "./mail/parse.js";
 
 export type DraftMode = "new" | "reply" | "reply_all" | "forward";
 
+export interface CloudDraftReference {
+  mailbox: string;
+  uidValidity: string;
+  uid: number;
+  messageId: string;
+  revision: number;
+  sha256: string;
+}
+
+export interface PendingCloudDraft {
+  messageId: string;
+  revision: number;
+  attempted: boolean;
+  uid?: number;
+  uidValidity?: string;
+}
+
+export interface CloudDraftState {
+  status: "saved" | "not_saved" | "partial" | "unknown" | "conflict" | "removed";
+  mailbox: string;
+  current?: CloudDraftReference;
+  previous?: CloudDraftReference;
+  pending?: PendingCloudDraft;
+  detail?: string;
+}
+
+export interface CloudDraftView {
+  status: CloudDraftState["status"] | "disabled" | "retained";
+  mailbox?: string;
+  revision?: number;
+  /** A signed mail_get reference, not the RFC Message-ID or a raw UID. */
+  messageId?: string;
+  cleanupPending?: boolean;
+  detail?: string;
+}
+
 export interface DraftAttachment {
   filename: string;
   contentType?: string;
@@ -35,6 +71,8 @@ export interface StoredDraft {
   updatedAt: string;
   sentAt?: string;
   sentDigest?: string;
+  deliveryStatus?: SendResult["status"];
+  cloudDraft?: CloudDraftState;
   preview?: {
     token: string;
     digest: string;
@@ -244,6 +282,7 @@ export class DraftStore {
     draft.sentAt = new Date().toISOString();
     draft.updatedAt = draft.sentAt;
     draft.sentDigest = digest;
+    draft.deliveryStatus = result.status;
     this.wipeDraftContent(draft);
   }
 

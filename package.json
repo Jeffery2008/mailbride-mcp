@@ -19,6 +19,8 @@
     "test:watch": "vitest",
     "validate": "pnpm check && pnpm test && pnpm build",
     "check-config": "node dist/server.cjs --check-config",
+    "check:cloud-drafts:build": "esbuild scripts/check-cloud-drafts.ts --bundle --platform=node --format=cjs --target=node20 --outfile=dist/check-cloud-drafts.cjs",
+    "check:cloud-drafts": "pnpm check:cloud-drafts:build && node dist/check-cloud-drafts.cjs",
     "start": "node dist/server.cjs --stdio"
   },
   "dependencies": {

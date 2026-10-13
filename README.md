@@ -130,6 +130,7 @@ Codex App、CLI 和 IDE 扩展会共享同一台 Codex host 上的 MCP 配置。
 | `contacts_search` | 搜索近期往来人 | `query?`, `accountScope?`, `accountId?`, `limit?` |
 | `mail_draft_create` | 创建新邮件/回复/回复全部/转发草稿 | `accountId`, `mode`, `sourceMessageId?`, `to?`, `cc?`, `bcc?`, `subject?`, `bodyText?`, `bodyHtml?`, `quoteOriginal?`, `includeOriginalAttachments?`, `attachments?` |
 | `mail_draft_update` | 按 revision 修改草稿 | `draftId`, `revision`, 要修改的字段 |
+| `mail_draft_sync` | 重试云端草稿同步/发送后的清理 | `draftId`, `revision` |
 | `mail_draft_preview` | 生成最终预览和短期确认令牌 | `draftId`, `revision` |
 | `mail_draft_send` | 发送已确认的当前预览 | `draftId`, `revision`, `confirmationToken`, `idempotencyKey`, `confirmed: true` |
 | `mail_draft_discard` | 丢弃草稿 | `draftId` |
@@ -237,6 +238,27 @@ Codex App、CLI 和 IDE 扩展会共享同一台 Codex host 上的 MCP 配置。
 
 SMTP 返回 `accepted`、`partial`、`rejected` 或 `unknown`。`accepted` 只表示服务器接受了收件人，不保证最终投递；明确的连接/认证/envelope/5xx 拒绝会保留可编辑草稿，但旧确认令牌已消费，修正后必须重新预览。`unknown`（例如 DATA 后超时）禁止自动重发，并会把本次尝试终结以防重复；应先核对 Sent 文件夹及服务商投递记录。`sentCopyMode: "none"` 或 `"imap_append"` 不会在 `unknown` 后补写 Sent，因此 Sent 中没有副本也不能证明邮件未被 SMTP 接受。
 
+## 云端草稿同步
+
+每个账号通过 `draftSyncMode` 选择 `"none"`（默认，仅进程内存）或 `"imap"`（自动保存到云端）。开启 IMAP 同步时必须配置真实的 `folders.drafts`，例如 QQ 的 `Drafts` 或网易企业邮箱的 `草稿箱`：
+
+```json
+{
+  "draftSyncMode": "imap",
+  "folders": { "inbox": "INBOX", "drafts": "Drafts" }
+}
+```
+
+`mail_draft_create` 和 `mail_draft_update` 会把完整 MIME 以 `\\Draft`、`\\Seen` 标记保存到这个文件夹，在网页、手机及其它邮件客户端中可见。云端草稿保留 To/CC/BCC、HTML、附件和回复线程头；提交给 SMTP 的 MIME 仍会移除 BCC header。同步开关只授权管理该 MCP 草稿自己的副本，不会打开 `allowFolderMutations` 或 `allowTrash`。
+
+返回的 `cloudDraft` 包含 `status`、`mailbox`、已保存的 `revision`、可传给 `mail_get` 的 opaque `messageId`，以及 `cleanupPending`/`detail`。`saved` 表示当前 revision 已保存并验证；`partial` 表示新版本已保存但旧版本清理失败；`not_saved` 表示未同步；`unknown` 表示 APPEND 结果仍需核对；`conflict` 表示云端内容、标记或 UIDVALIDITY 已改变。`disabled` 表示关闭同步。不能把一个成功的本地草稿创建结果等同于成功的云端保存。
+
+IMAP 不能原地编辑消息，所以更新采用“验证旧稿 → APPEND 新稿并验证 UID/内容 → 选择性删除旧稿”。更新和清理要求 UIDPLUS，拒绝会影响其它消息的宽泛 EXPUNGE。若同步失败，本地内容、draftId 和 revision 都保留；请用 `mail_draft_sync({ draftId, revision })` 重试同一对象，避免再次调用 create 生成重复草稿。超时等不明确 APPEND 会先按唯一 Message-ID 在有界窗口里核对，未确认前不再次 APPEND。邮箱客户端的外部修改会阻止覆盖、丢弃和发送本地副本。
+
+`mail_draft_discard` 会清理该对象对应的已验证云端副本，再丢弃本地草稿；失败会返回 `discarded: false` 并保留本地对象。SMTP `accepted` 后自动清理 Drafts，清理失败不改变发送结果，可再次调用 `mail_draft_sync` 仅重试清理。SMTP `rejected` 保留可编辑草稿；`partial`/`unknown` 保留云端副本用于人工核对，禁止自动重发。不要因 Drafts 仍有副本而推断邮件未发送。
+
+所有操作在每个 MCP 进程内按账号排队建立 IMAP 连接，同一个草稿的编辑、预览、同步、丢弃和发送也串行处理。云端 MIME 受现有 `maxMessageBytes` 约束，生成时流式计数，未放大内存/附件限制。进程重启或本地草稿 TTL 到期不会删除云端草稿；可在邮箱客户端继续编辑/发送，但旧的 MCP draftId 不会跨进程恢复，双向导入仍不支持。
+
 ## 安全和权限
 
 - 凭据只从受保护的凭据文件或环境变量引用读取，绝不会成为工具参数或返回值。
@@ -244,7 +266,7 @@ SMTP 返回 `accepted`、`partial`、`rejected` 或 `unknown`。`accepted` 只�
 - TLS 最低为 TLS 1.2，证书校验开启；IMAP implicit TLS 通常是 993，SMTP implicit TLS 通常是 465，SMTP STARTTLS 通常是 587。
 - 收件人数量、域名、no-reply 地址、正文大小、邮件大小和附件大小受账号策略及全局 limits 限制。
 - Nodemailer 禁止从任意路径或 URL 读取附件；本地附件必须位于该账号的 `allowedAttachmentRoots`。
-- BCC 只进入 SMTP envelope，不写入可见 header；不要在预览之外向其他收件人泄露 BCC。
+- BCC 只进入 SMTP envelope，不写入已发送 MIME 的可见 header；私有云端 Drafts 会保留 BCC 以便账号所有者继续编辑，不向其他收件人泄露。
 - 永久删除要求邮件已经在配置的 Trash 文件夹并再次显式确认；跨账号移动和复制不允许。
 - 所有发送与邮箱写入权限都是 opt-in：`allowNewMessages`、`allowReply`、`allowReplyAll`、`allowForward`、`allowBcc`、`allowAdditionalReplyRecipients`、`allowFolderMutations` 和 `allowTrash` 默认均为 `false`。
 - `allowFolderMutations` 控制 flags、移动、复制和文件夹管理；`allowTrash` 控制移入回收站和永久删除。`mail_folder_manage` 的删除动作还需要显式确认。
@@ -269,5 +291,7 @@ pnpm test         # Vitest
 pnpm build        # dist/server.cjs
 pnpm validate      # 以上三项
 ```
+
+已开启 IMAP 草稿同步的账号可执行 `pnpm check:cloud-drafts --account <账号id> --write-test`：它会创建一封发给自己的测试草稿，读取并验证云端内容、更新草稿、按原邮件引用确认旧版本消失，最后清理并确认新版本也消失。这个命令会写入/删除它自己的测试草稿，不会调用 SMTP 或读取凭据文件；只有明确传入 `--write-test` 才运行。
 
 实现细节和 Agent 调用规约见 [skills/mailbride-mcp/SKILL.md](./skills/mailbride-mcp/SKILL.md)。

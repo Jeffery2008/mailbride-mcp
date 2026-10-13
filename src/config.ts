@@ -74,11 +74,17 @@ export const AccountConfigSchema = z
     imap: TlsEndpointSchema,
     smtp: TlsEndpointSchema,
     sentCopyMode: z.enum(["provider", "imap_append", "none"]).default("provider"),
+    draftSyncMode: z.enum(["none", "imap"]).default("none"),
     folders: FolderNamesSchema,
     policy: AccountPolicySchema,
     allowedAttachmentRoots: z.array(z.string().min(1)).max(20).default([]),
   })
-  .strict();
+  .strict()
+  .superRefine((account, context) => {
+    if (account.draftSyncMode === "imap" && !account.folders.drafts) {
+      context.addIssue({ code: "custom", path: ["folders", "drafts"], message: "required for IMAP draft sync" });
+    }
+  });
 
 const LimitsSchema = z
   .object({

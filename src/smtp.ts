@@ -6,7 +6,7 @@ import type Mail from "nodemailer/lib/mailer/index.js";
 import { appendSentCopy } from "./imap.js";
 import type { AccountRuntime } from "./imap.js";
 import type { AppConfig } from "./config.js";
-import type { StoredDraft } from "./drafts.js";
+import type { CloudDraftView, StoredDraft } from "./drafts.js";
 import { sanitizeMessageId } from "./mail/parse.js";
 
 export interface SendResult {
@@ -17,6 +17,7 @@ export interface SendResult {
   response?: string;
   detail: string;
   sentCopy?: "provider" | "saved" | "not_saved";
+  cloudDraft?: CloudDraftView;
 }
 
 function smtpAuth(runtime: AccountRuntime): SMTPConnection.AuthenticationType {
@@ -64,6 +65,34 @@ export function mailOptionsFromDraft(runtime: AccountRuntime, draft: StoredDraft
 
 export async function composeDraftSource(runtime: AccountRuntime, draft: StoredDraft): Promise<Buffer> {
   return (await composeDraftDelivery(runtime, draft)).raw;
+}
+
+/** Only the account owner's IMAP Drafts copy retains BCC; SMTP still strips it. */
+export async function composeCloudDraftSource(
+  runtime: AccountRuntime,
+  draft: StoredDraft,
+  messageId: string,
+  maxBytes: number,
+): Promise<Buffer> {
+  const message = new MailComposer({
+    ...mailOptionsFromDraft(runtime, draft),
+    messageId,
+    date: new Date(draft.createdAt),
+    headers: {
+      "X-MailBride-Draft-ID": draft.id,
+      "X-MailBride-Draft-Revision": String(draft.revision),
+    },
+  }).compile();
+  message.keepBcc = true;
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of message.createReadStream()) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > maxBytes) throw new Error("cloud draft exceeds the configured message byte limit");
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks, size);
 }
 
 async function composeDraftDelivery(runtime: AccountRuntime, draft: StoredDraft) {
